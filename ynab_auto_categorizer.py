@@ -276,7 +276,7 @@ def main():
     
     # CONFIGURACIÓN - Reemplaza con tus datos
     API_TOKEN = os.getenv("YNAB_API_TOKEN", "TU_TOKEN_AQUI")
-    BUDGET_ID = "last-used"  # O el ID específico de tu presupuesto
+    BUDGET_ID = os.getenv("YNAB_BUDGET_ID", "last-used")  # O el ID específico de tu presupuesto
     
     if API_TOKEN == "TU_TOKEN_AQUI":
         print("⚠️  Por favor configura tu YNAB_API_TOKEN")
