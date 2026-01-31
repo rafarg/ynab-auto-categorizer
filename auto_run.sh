@@ -1,47 +1,39 @@
 #!/bin/bash
 #
 # Script de ejecución automática para YNAB Auto-Categorizer
-# Úsalo para programar tareas con cron
 #
-# Ejemplo de crontab (ejecutar cada lunes a las 9am):
-# 0 9 * * 1 /ruta/completa/a/auto_run.sh >> /ruta/a/logs/ynab.log 2>&1
+# Modos de uso:
+#   ./auto_run.sh categorize   - Modo interactivo de categorización
+#   ./auto_run.sh report       - Solo mostrar reportes
+#
+# Para programar con cron (reporte semanal cada lunes a las 9am):
+# 0 9 * * 1 /ruta/completa/a/auto_run.sh report >> /ruta/a/logs/ynab.log 2>&1
 #
 
-# Configuración
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PYTHON_CMD="python3"
-LOG_FILE="${SCRIPT_DIR}/ynab_auto.log"
 
-# Cargar token desde archivo .env si existe
+# Cargar variables de entorno desde .env
 if [ -f "${SCRIPT_DIR}/.env" ]; then
-    export $(cat "${SCRIPT_DIR}/.env" | grep -v '^#' | xargs)
+    set -a
+    source "${SCRIPT_DIR}/.env"
+    set +a
 fi
 
-# Verificar que el token esté configurado
+# Verificar token
 if [ -z "$YNAB_API_TOKEN" ]; then
     echo "❌ Error: YNAB_API_TOKEN no está configurado"
-    echo "   Crea un archivo .env con tu token o configura la variable de entorno"
+    echo "   Crea un archivo .env con tu token"
     exit 1
 fi
 
-# Fecha y hora
-echo "========================================" >> "$LOG_FILE"
-echo "🕒 Ejecución: $(date)" >> "$LOG_FILE"
-echo "========================================" >> "$LOG_FILE"
+# Modo de ejecución
+MODE="${1:-report}"
 
-# Categorizar automáticamente (sin confirmación)
-echo "📝 Categorizando transacciones..." >> "$LOG_FILE"
-$PYTHON_CMD "${SCRIPT_DIR}/ynab_auto_categorizer.py" <<EOF >> "$LOG_FILE" 2>&1
-2
-s
-EOF
+echo "=========================================="
+echo "🏦 YNAB Auto-Categorizer"
+echo "🕒 $(date)"
+echo "📋 Modo: $MODE"
+echo "=========================================="
 
-# Generar reporte HTML
-echo "📊 Generando reporte HTML..." >> "$LOG_FILE"
-$PYTHON_CMD "${SCRIPT_DIR}/generate_html_report.py" >> "$LOG_FILE" 2>&1
-
-echo "✅ Completado" >> "$LOG_FILE"
-echo "" >> "$LOG_FILE"
-
-# Opcional: Enviar notificación
-# notify-send "YNAB" "Transacciones categorizadas y reporte generado"
+$PYTHON_CMD "${SCRIPT_DIR}/ynab_auto_categorizer.py" "$MODE"
