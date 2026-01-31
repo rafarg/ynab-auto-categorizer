@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Tuple
 import os
 import sys
 import argparse
+import webbrowser
 from collections import defaultdict
 from pathlib import Path
 
@@ -440,24 +441,306 @@ class YNABAutoCategorizer:
         print(f"\n📝 Transacciones: {report['transaction_count']}")
 
     def show_full_report(self):
-        """Muestra reporte completo: semanal y mensual"""
+        """Genera y abre reporte HTML completo"""
         print("\n🔍 Generando reportes...")
 
-        # Obtener presupuesto mensual
+        # Obtener datos
         try:
             monthly_budget = self.get_monthly_budget()
         except:
             monthly_budget = {}
 
-        # Reporte semanal
         weekly_report = self.get_report_data(weeks_back=1)
-        self.print_report("REPORTE SEMANAL", weekly_report)
-
-        # Reporte mensual
         monthly_report = self.get_report_data(weeks_back=4)
-        self.print_report("REPORTE MENSUAL (Presupuesto vs Actividad)", monthly_report, monthly_budget)
 
-        print("\n" + "="*80 + "\n")
+        # Generar HTML
+        html_file = self.generate_html_report(weekly_report, monthly_report, monthly_budget)
+
+        print(f"✅ Reporte generado: {html_file}")
+        print("🌐 Abriendo en navegador...")
+
+        # Abrir en navegador
+        webbrowser.open(f"file://{html_file}")
+
+    def generate_html_report(self, weekly: Dict, monthly: Dict, budget: Dict) -> str:
+        """Genera reporte HTML con gráficos"""
+        now = datetime.now()
+        report_file = Path(__file__).parent / f"reporte_ynab_{now.strftime('%Y%m%d_%H%M')}.html"
+
+        # Preparar datos para gráficos
+        weekly_categories = list(weekly['expenses_by_category'].keys())[:10]
+        weekly_amounts = [weekly['expenses_by_category'][c] for c in weekly_categories]
+
+        monthly_categories = list(monthly['expenses_by_category'].keys())[:15]
+        monthly_amounts = [monthly['expenses_by_category'][c] for c in monthly_categories]
+
+        # Datos de presupuesto vs actividad
+        budget_data = []
+        for cat, amount in monthly['expenses_by_category'].items():
+            if cat in budget and cat != "Sin categoría":
+                b = budget[cat]
+                budget_data.append({
+                    "category": cat,
+                    "budgeted": b['budgeted'],
+                    "spent": amount,
+                    "available": b['balance'],
+                    "status": "over" if b['balance'] < 0 else ("low" if b['balance'] < b['budgeted'] * 0.2 else "ok")
+                })
+
+        html = f'''<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YNAB Report - {now.strftime('%d/%m/%Y')}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        header {{
+            text-align: center;
+            padding: 30px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 30px;
+        }}
+        header h1 {{ font-size: 2.5em; margin-bottom: 10px; }}
+        header p {{ color: #888; font-size: 1.1em; }}
+        .summary-cards {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }}
+        .card {{
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }}
+        .card h3 {{ color: #888; font-size: 0.9em; text-transform: uppercase; margin-bottom: 10px; }}
+        .card .value {{ font-size: 2em; font-weight: bold; }}
+        .card .value.positive {{ color: #4ade80; }}
+        .card .value.negative {{ color: #f87171; }}
+        .card .period {{ color: #666; font-size: 0.85em; margin-top: 5px; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 30px; margin-bottom: 30px; }}
+        .section {{
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }}
+        .section h2 {{ margin-bottom: 20px; font-size: 1.3em; display: flex; align-items: center; gap: 10px; }}
+        .chart-container {{ position: relative; height: 300px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }}
+        th {{ color: #888; font-weight: 500; font-size: 0.85em; text-transform: uppercase; }}
+        .status {{ padding: 4px 10px; border-radius: 20px; font-size: 0.8em; font-weight: 500; }}
+        .status.ok {{ background: rgba(74, 222, 128, 0.2); color: #4ade80; }}
+        .status.low {{ background: rgba(251, 191, 36, 0.2); color: #fbbf24; }}
+        .status.over {{ background: rgba(248, 113, 113, 0.2); color: #f87171; }}
+        .amount {{ font-family: 'SF Mono', Monaco, monospace; }}
+        .amount.negative {{ color: #f87171; }}
+        .progress-bar {{
+            height: 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 5px;
+        }}
+        .progress-fill {{
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }}
+        .progress-fill.ok {{ background: #4ade80; }}
+        .progress-fill.low {{ background: #fbbf24; }}
+        .progress-fill.over {{ background: #f87171; }}
+        footer {{
+            text-align: center;
+            padding: 30px;
+            color: #666;
+            font-size: 0.9em;
+        }}
+        @media (max-width: 768px) {{
+            .grid {{ grid-template-columns: 1fr; }}
+            header h1 {{ font-size: 1.8em; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 YNAB Financial Report</h1>
+            <p>Generado el {now.strftime('%d de %B de %Y a las %H:%M')}</p>
+        </header>
+
+        <div class="summary-cards">
+            <div class="card">
+                <h3>💰 Ingresos (Mes)</h3>
+                <div class="value positive">€{monthly['total_income']:,.2f}</div>
+                <div class="period">{monthly['period']}</div>
+            </div>
+            <div class="card">
+                <h3>💸 Gastos (Mes)</h3>
+                <div class="value negative">€{monthly['total_expenses']:,.2f}</div>
+                <div class="period">{monthly['period']}</div>
+            </div>
+            <div class="card">
+                <h3>{'✅' if monthly['net'] >= 0 else '⚠️'} Balance (Mes)</h3>
+                <div class="value {'positive' if monthly['net'] >= 0 else 'negative'}">€{monthly['net']:,.2f}</div>
+                <div class="period">{monthly['period']}</div>
+            </div>
+            <div class="card">
+                <h3>📝 Transacciones</h3>
+                <div class="value">{monthly['transaction_count']}</div>
+                <div class="period">Este mes</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="section">
+                <h2>📈 Gastos Semanales</h2>
+                <p style="color:#888; margin-bottom:15px;">{weekly['period']} • €{weekly['total_expenses']:,.2f} total</p>
+                <div class="chart-container">
+                    <canvas id="weeklyChart"></canvas>
+                </div>
+            </div>
+            <div class="section">
+                <h2>📊 Gastos Mensuales</h2>
+                <p style="color:#888; margin-bottom:15px;">{monthly['period']} • €{monthly['total_expenses']:,.2f} total</p>
+                <div class="chart-container">
+                    <canvas id="monthlyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="section" style="margin-bottom: 30px;">
+            <h2>💳 Presupuesto vs Actividad</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Categoría</th>
+                        <th>Presupuestado</th>
+                        <th>Gastado</th>
+                        <th>Disponible</th>
+                        <th>Estado</th>
+                        <th style="width: 150px;">Progreso</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(self._generate_budget_row(item) for item in budget_data)}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="grid">
+            <div class="section">
+                <h2>💵 Ingresos por Categoría</h2>
+                <table>
+                    <thead><tr><th>Categoría</th><th>Importe</th></tr></thead>
+                    <tbody>
+                        {''.join(f'<tr><td>{cat}</td><td class="amount">€{amt:,.2f}</td></tr>' for cat, amt in monthly['income_by_category'].items() if cat != "Sin categoría")}
+                    </tbody>
+                </table>
+            </div>
+            <div class="section">
+                <h2>📉 Top Gastos del Mes</h2>
+                <table>
+                    <thead><tr><th>Categoría</th><th>Importe</th><th>%</th></tr></thead>
+                    <tbody>
+                        {''.join(f'<tr><td>{cat}</td><td class="amount">€{amt:,.2f}</td><td>{(amt/monthly["total_expenses"]*100) if monthly["total_expenses"] > 0 else 0:.1f}%</td></tr>' for cat, amt in list(monthly['expenses_by_category'].items())[:10])}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <footer>
+            <p>YNAB Auto-Categorizer • Reporte generado automáticamente</p>
+        </footer>
+    </div>
+
+    <script>
+        const colors = [
+            '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
+            '#f43f5e', '#f97316', '#eab308', '#84cc16', '#22c55e',
+            '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1'
+        ];
+
+        new Chart(document.getElementById('weeklyChart'), {{
+            type: 'doughnut',
+            data: {{
+                labels: {json.dumps(weekly_categories)},
+                datasets: [{{
+                    data: {json.dumps(weekly_amounts)},
+                    backgroundColor: colors.slice(0, {len(weekly_categories)}),
+                    borderWidth: 0
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {{
+                    legend: {{ position: 'right', labels: {{ color: '#888', padding: 10 }} }}
+                }}
+            }}
+        }});
+
+        new Chart(document.getElementById('monthlyChart'), {{
+            type: 'bar',
+            data: {{
+                labels: {json.dumps(monthly_categories)},
+                datasets: [{{
+                    label: 'Gastos €',
+                    data: {json.dumps(monthly_amounts)},
+                    backgroundColor: colors.slice(0, {len(monthly_categories)}),
+                    borderRadius: 5
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {{ legend: {{ display: false }} }},
+                scales: {{
+                    x: {{ grid: {{ color: 'rgba(255,255,255,0.1)' }}, ticks: {{ color: '#888' }} }},
+                    y: {{ grid: {{ display: false }}, ticks: {{ color: '#888' }} }}
+                }}
+            }}
+        }});
+    </script>
+</body>
+</html>'''
+
+        with open(report_file, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        return str(report_file.absolute())
+
+    def _generate_budget_row(self, item: Dict) -> str:
+        """Genera una fila de la tabla de presupuesto"""
+        pct = (item['spent'] / item['budgeted'] * 100) if item['budgeted'] > 0 else 100
+        status_text = {"ok": "OK", "low": "Bajo", "over": "Excedido"}[item['status']]
+
+        return f'''<tr>
+            <td>{item['category']}</td>
+            <td class="amount">€{item['budgeted']:,.2f}</td>
+            <td class="amount">€{item['spent']:,.2f}</td>
+            <td class="amount {'negative' if item['available'] < 0 else ''}">€{item['available']:,.2f}</td>
+            <td><span class="status {item['status']}">{status_text}</span></td>
+            <td>
+                <div class="progress-bar">
+                    <div class="progress-fill {item['status']}" style="width: {min(pct, 100):.0f}%"></div>
+                </div>
+            </td>
+        </tr>'''
 
 
 def main():
