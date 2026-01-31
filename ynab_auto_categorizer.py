@@ -343,10 +343,23 @@ class YNABAutoCategorizer:
 
         return input("         Introduce palabra clave: ").strip() or None
 
-    def get_report_data(self, weeks_back: int = 1) -> Dict:
-        """Genera datos del reporte para un período"""
-        end_date = datetime.now()
-        start_date = end_date - timedelta(weeks=weeks_back)
+    def get_report_data(self, period: str = "month") -> Dict:
+        """Genera datos del reporte para un período
+
+        Args:
+            period: "week" para semana actual (lunes a hoy), "month" para mes actual
+        """
+        today = datetime.now()
+
+        if period == "week":
+            # Semana actual: desde el lunes hasta hoy
+            days_since_monday = today.weekday()  # 0 = lunes
+            start_date = today - timedelta(days=days_since_monday)
+            end_date = today
+        else:  # month
+            # Mes actual: desde el día 1 hasta hoy
+            start_date = today.replace(day=1)
+            end_date = today
 
         url = f"{self.base_url}/budgets/{self.budget_id}/transactions"
         params = {"since_date": start_date.strftime("%Y-%m-%d")}
@@ -354,9 +367,17 @@ class YNABAutoCategorizer:
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
 
-        transactions = response.json()["data"]["transactions"]
+        all_transactions = response.json()["data"]["transactions"]
         categories = self.get_categories()
         category_names = {cid: name for name, cid in categories.items()}
+
+        # Filtrar transacciones dentro del rango exacto
+        start_str = start_date.strftime("%Y-%m-%d")
+        end_str = end_date.strftime("%Y-%m-%d")
+        transactions = [
+            t for t in all_transactions
+            if start_str <= t["date"] <= end_str
+        ]
 
         expenses_by_category = defaultdict(float)
         income_by_category = defaultdict(float)
@@ -464,8 +485,8 @@ class YNABAutoCategorizer:
         except:
             monthly_budget = {}
 
-        weekly_report = self.get_report_data(weeks_back=1)
-        monthly_report = self.get_report_data(weeks_back=4)
+        weekly_report = self.get_report_data(period="week")
+        monthly_report = self.get_report_data(period="month")
 
         # Generar HTML
         html_file = self.generate_html_report(weekly_report, monthly_report, monthly_budget)
