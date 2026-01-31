@@ -360,6 +360,7 @@ class YNABAutoCategorizer:
 
         expenses_by_category = defaultdict(float)
         income_by_category = defaultdict(float)
+        transactions_by_category = defaultdict(list)
         total_expenses = 0
         total_income = 0
 
@@ -370,6 +371,18 @@ class YNABAutoCategorizer:
             amount = t["amount"] / 1000
             category_id = t.get("category_id")
             category_name = category_names.get(category_id, "Sin categoría")
+
+            # Guardar detalle de transacción
+            tx_detail = {
+                "date": t["date"],
+                "payee": t.get("payee_name", "Sin nombre"),
+                "memo": t.get("memo", ""),
+                "amount": amount,
+                "account": t.get("account_name", "")
+            }
+
+            # Guardar todas las transacciones por categoría
+            transactions_by_category[category_name].append(tx_detail)
 
             if amount < 0:
                 expenses_by_category[category_name] += abs(amount)
@@ -385,6 +398,7 @@ class YNABAutoCategorizer:
             "net": total_income - total_expenses,
             "expenses_by_category": dict(sorted(expenses_by_category.items(), key=lambda x: x[1], reverse=True)),
             "income_by_category": dict(sorted(income_by_category.items(), key=lambda x: x[1], reverse=True)),
+            "transactions_by_category": dict(transactions_by_category),
             "transaction_count": len([t for t in transactions if not t.get("deleted") and not t.get("transfer_account_id")])
         }
 
@@ -474,18 +488,38 @@ class YNABAutoCategorizer:
         monthly_categories = list(monthly['expenses_by_category'].keys())[:15]
         monthly_amounts = [monthly['expenses_by_category'][c] for c in monthly_categories]
 
-        # Datos de presupuesto vs actividad
+        # Preparar transacciones para el modal (combinar weekly y monthly)
+        all_transactions = {}
+        for cat, txs in weekly.get('transactions_by_category', {}).items():
+            all_transactions[cat] = txs
+        for cat, txs in monthly.get('transactions_by_category', {}).items():
+            if cat not in all_transactions:
+                all_transactions[cat] = txs
+            else:
+                # Combinar sin duplicados (por fecha y monto)
+                existing = {(t['date'], t['amount']) for t in all_transactions[cat]}
+                for tx in txs:
+                    if (tx['date'], tx['amount']) not in existing:
+                        all_transactions[cat].append(tx)
+
+        # Ordenar transacciones por fecha
+        for cat in all_transactions:
+            all_transactions[cat].sort(key=lambda x: x['date'], reverse=True)
+
+        # Datos de presupuesto vs actividad (usar datos directos del presupuesto)
         budget_data = []
-        for cat, amount in monthly['expenses_by_category'].items():
-            if cat in budget and cat != "Sin categoría":
-                b = budget[cat]
+        for cat, b in budget.items():
+            # Solo incluir categorías con actividad o presupuesto
+            if (b['activity'] != 0 or b['budgeted'] > 0) and cat not in ["Inflow: Ready to Assign", "Sin categoría"]:
                 budget_data.append({
                     "category": cat,
                     "budgeted": b['budgeted'],
-                    "spent": amount,
+                    "activity": b['activity'],  # Mantener el signo original
                     "available": b['balance'],
-                    "status": "over" if b['balance'] < 0 else ("low" if b['balance'] < b['budgeted'] * 0.2 else "ok")
+                    "status": "over" if b['balance'] < 0 else ("low" if b['budgeted'] > 0 and b['balance'] < b['budgeted'] * 0.2 else "ok")
                 })
+        # Ordenar por actividad (más gasto primero, valores más negativos)
+        budget_data.sort(key=lambda x: x['activity'])
 
         html = f'''<!DOCTYPE html>
 <html lang="es">
@@ -548,6 +582,7 @@ class YNABAutoCategorizer:
         .status.over {{ background: rgba(248, 113, 113, 0.2); color: #f87171; }}
         .amount {{ font-family: 'SF Mono', Monaco, monospace; }}
         .amount.negative {{ color: #f87171; }}
+        .amount.positive {{ color: #4ade80; }}
         .progress-bar {{
             height: 6px;
             background: rgba(255,255,255,0.1);
@@ -569,6 +604,65 @@ class YNABAutoCategorizer:
             color: #666;
             font-size: 0.9em;
         }}
+        /* Modal styles */
+        .modal {{
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(5px);
+        }}
+        .modal-content {{
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.1);
+            animation: modalSlide 0.3s ease;
+        }}
+        @keyframes modalSlide {{
+            from {{ transform: translateY(-50px); opacity: 0; }}
+            to {{ transform: translateY(0); opacity: 1; }}
+        }}
+        .modal-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }}
+        .modal-header h2 {{ font-size: 1.5em; }}
+        .modal-close {{
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 2em;
+            cursor: pointer;
+            transition: color 0.2s;
+        }}
+        .modal-close:hover {{ color: #fff; }}
+        .modal-total {{
+            font-size: 1.2em;
+            color: #888;
+            margin-bottom: 20px;
+        }}
+        .modal-total span {{ color: #f87171; font-weight: bold; }}
+        .tx-table {{ width: 100%; }}
+        .tx-table th {{ text-align: left; padding: 10px; color: #888; font-size: 0.85em; }}
+        .tx-table td {{ padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }}
+        .tx-table tr:hover {{ background: rgba(255,255,255,0.05); }}
+        .clickable-row {{ cursor: pointer; transition: background 0.2s; }}
+        .clickable-row:hover {{ background: rgba(255,255,255,0.08); }}
+        .hint {{ text-align: center; color: #666; font-size: 0.85em; margin-top: 15px; }}
         @media (max-width: 768px) {{
             .grid {{ grid-template-columns: 1fr; }}
             header h1 {{ font-size: 1.8em; }}
@@ -622,32 +716,13 @@ class YNABAutoCategorizer:
             </div>
         </div>
 
-        <div class="section" style="margin-bottom: 30px;">
-            <h2>💳 Presupuesto vs Actividad</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Categoría</th>
-                        <th>Presupuestado</th>
-                        <th>Gastado</th>
-                        <th>Disponible</th>
-                        <th>Estado</th>
-                        <th style="width: 150px;">Progreso</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {''.join(self._generate_budget_row(item) for item in budget_data)}
-                </tbody>
-            </table>
-        </div>
-
         <div class="grid">
             <div class="section">
                 <h2>💵 Ingresos por Categoría</h2>
                 <table>
                     <thead><tr><th>Categoría</th><th>Importe</th></tr></thead>
                     <tbody>
-                        {''.join(f'<tr><td>{cat}</td><td class="amount">€{amt:,.2f}</td></tr>' for cat, amt in monthly['income_by_category'].items() if cat != "Sin categoría")}
+                        {''.join(self._generate_clickable_row(cat, f"€{amt:,.2f}") for cat, amt in monthly['income_by_category'].items() if cat != "Sin categoría")}
                     </tbody>
                 </table>
             </div>
@@ -656,44 +731,142 @@ class YNABAutoCategorizer:
                 <table>
                     <thead><tr><th>Categoría</th><th>Importe</th><th>%</th></tr></thead>
                     <tbody>
-                        {''.join(f'<tr><td>{cat}</td><td class="amount">€{amt:,.2f}</td><td>{(amt/monthly["total_expenses"]*100) if monthly["total_expenses"] > 0 else 0:.1f}%</td></tr>' for cat, amt in list(monthly['expenses_by_category'].items())[:10])}
+                        {''.join(self._generate_clickable_row(cat, f"€{amt:,.2f}", f"{(amt/monthly['total_expenses']*100) if monthly['total_expenses'] > 0 else 0:.1f}%") for cat, amt in list(monthly['expenses_by_category'].items())[:10])}
                     </tbody>
                 </table>
             </div>
         </div>
 
+        <div class="section" style="margin-bottom: 30px;">
+            <h2>💳 Presupuesto vs Actividad</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Categoría</th>
+                        <th>Asignado</th>
+                        <th>Actividad</th>
+                        <th>Disponible</th>
+                        <th>Estado</th>
+                        <th style="width: 150px;">Progreso</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(self._generate_budget_row(item, all_transactions) for item in budget_data)}
+                </tbody>
+            </table>
+        </div>
+
         <footer>
             <p>YNAB Auto-Categorizer • Reporte generado automáticamente</p>
+            <p class="hint">💡 Clic en cualquier categoría para ver el detalle de transacciones</p>
         </footer>
     </div>
 
+    <!-- Modal para detalle de transacciones -->
+    <div id="txModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Transacciones</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-total">Total: <span id="modalTotal">€0.00</span></div>
+            <table class="tx-table">
+                <thead>
+                    <tr><th>Fecha</th><th>Comercio</th><th>Cuenta</th><th>Importe</th></tr>
+                </thead>
+                <tbody id="modalBody"></tbody>
+            </table>
+        </div>
+    </div>
+
     <script>
+        // Datos de transacciones por categoría
+        const transactionsData = {json.dumps(all_transactions, ensure_ascii=False)};
+
+        function showTransactions(category) {{
+            const modal = document.getElementById('txModal');
+            const title = document.getElementById('modalTitle');
+            const body = document.getElementById('modalBody');
+            const total = document.getElementById('modalTotal');
+
+            const txs = transactionsData[category] || [];
+
+            title.textContent = category;
+
+            let totalAmount = 0;
+            let html = '';
+
+            txs.forEach(tx => {{
+                totalAmount += tx.amount;
+                const amountClass = tx.amount < 0 ? 'negative' : 'positive';
+                const amountStr = tx.amount < 0
+                    ? '−€' + Math.abs(tx.amount).toLocaleString('es-ES', {{minimumFractionDigits: 2}})
+                    : '€' + tx.amount.toLocaleString('es-ES', {{minimumFractionDigits: 2}});
+                html += `<tr>
+                    <td>${{tx.date}}</td>
+                    <td>${{tx.payee}}</td>
+                    <td>${{tx.account || '-'}}</td>
+                    <td class="amount ${{amountClass}}">${{amountStr}}</td>
+                </tr>`;
+            }});
+
+            body.innerHTML = html || '<tr><td colspan="4" style="text-align:center;color:#888;">No hay transacciones</td></tr>';
+
+            const totalStr = totalAmount < 0
+                ? '−€' + Math.abs(totalAmount).toLocaleString('es-ES', {{minimumFractionDigits: 2}})
+                : '€' + totalAmount.toLocaleString('es-ES', {{minimumFractionDigits: 2}});
+            total.textContent = totalStr;
+
+            modal.style.display = 'block';
+        }}
+
+        function closeModal() {{
+            document.getElementById('txModal').style.display = 'none';
+        }}
+
+        // Cerrar modal al hacer clic fuera
+        window.onclick = function(event) {{
+            const modal = document.getElementById('txModal');
+            if (event.target === modal) {{
+                modal.style.display = 'none';
+            }}
+        }}
+
+        // Cerrar con Escape
+        document.addEventListener('keydown', function(e) {{
+            if (e.key === 'Escape') closeModal();
+        }});
+
         const colors = [
             '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
             '#f43f5e', '#f97316', '#eab308', '#84cc16', '#22c55e',
             '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1'
         ];
 
-        new Chart(document.getElementById('weeklyChart'), {{
-            type: 'doughnut',
+        const weeklyChart = new Chart(document.getElementById('weeklyChart'), {{
+            type: 'bar',
             data: {{
                 labels: {json.dumps(weekly_categories)},
                 datasets: [{{
+                    label: 'Gastos €',
                     data: {json.dumps(weekly_amounts)},
                     backgroundColor: colors.slice(0, {len(weekly_categories)}),
-                    borderWidth: 0
+                    borderRadius: 5
                 }}]
             }},
             options: {{
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: {{
-                    legend: {{ position: 'right', labels: {{ color: '#888', padding: 10 }} }}
+                indexAxis: 'y',
+                plugins: {{ legend: {{ display: false }} }},
+                scales: {{
+                    x: {{ grid: {{ color: 'rgba(255,255,255,0.1)' }}, ticks: {{ color: '#888' }} }},
+                    y: {{ grid: {{ display: false }}, ticks: {{ color: '#888' }} }}
                 }}
             }}
         }});
 
-        new Chart(document.getElementById('monthlyChart'), {{
+        const monthlyChart = new Chart(document.getElementById('monthlyChart'), {{
             type: 'bar',
             data: {{
                 labels: {json.dumps(monthly_categories)},
@@ -715,6 +888,24 @@ class YNABAutoCategorizer:
                 }}
             }}
         }});
+
+        // Clic en gráfico semanal
+        document.getElementById('weeklyChart').addEventListener('click', function(evt) {{
+            const points = weeklyChart.getElementsAtEventForMode(evt, 'nearest', {{ intersect: true }}, true);
+            if (points.length) {{
+                const category = weeklyChart.data.labels[points[0].index];
+                showTransactions(category);
+            }}
+        }});
+
+        // Clic en gráfico mensual
+        document.getElementById('monthlyChart').addEventListener('click', function(evt) {{
+            const points = monthlyChart.getElementsAtEventForMode(evt, 'nearest', {{ intersect: true }}, true);
+            if (points.length) {{
+                const category = monthlyChart.data.labels[points[0].index];
+                showTransactions(category);
+            }}
+        }});
     </script>
 </body>
 </html>'''
@@ -724,15 +915,38 @@ class YNABAutoCategorizer:
 
         return str(report_file.absolute())
 
-    def _generate_budget_row(self, item: Dict) -> str:
+    def _generate_clickable_row(self, category: str, *columns) -> str:
+        """Genera una fila clickable para las tablas"""
+        cat_escaped = category.replace("'", "\\'")
+        cols_html = ''.join(f'<td class="amount">{col}</td>' if col.startswith('€') or col.endswith('%') else f'<td>{col}</td>' for col in columns)
+        return f'<tr class="clickable-row" onclick="showTransactions(\'{cat_escaped}\')" title="Clic para ver detalle"><td>{category}</td>{cols_html}</tr>'
+
+    def _generate_budget_row(self, item: Dict, transactions: Dict) -> str:
         """Genera una fila de la tabla de presupuesto"""
-        pct = (item['spent'] / item['budgeted'] * 100) if item['budgeted'] > 0 else 100
+        activity = item['activity']
+        budgeted = item['budgeted']
+        category = item['category']
+        pct = (abs(activity) / budgeted * 100) if budgeted > 0 else 100
         status_text = {"ok": "OK", "low": "Bajo", "over": "Excedido"}[item['status']]
 
-        return f'''<tr>
-            <td>{item['category']}</td>
-            <td class="amount">€{item['budgeted']:,.2f}</td>
-            <td class="amount">€{item['spent']:,.2f}</td>
+        # Formatear actividad (solo signo negativo)
+        activity_class = "negative" if activity < 0 else "positive" if activity > 0 else ""
+        if activity < 0:
+            activity_str = f"−{abs(activity):,.2f}"  # Signo menos tipográfico
+        else:
+            activity_str = f"{activity:,.2f}"  # Sin signo para positivos
+
+        # Escapar comillas en el nombre de categoría para JavaScript
+        cat_escaped = category.replace("'", "\\'")
+        has_transactions = category in transactions and len(transactions[category]) > 0
+        clickable_class = "clickable-row" if has_transactions else ""
+        onclick = f'onclick="showTransactions(\'{cat_escaped}\')"' if has_transactions else ""
+        title = 'title="Clic para ver detalle"' if has_transactions else ""
+
+        return f'''<tr class="{clickable_class}" {onclick} {title}>
+            <td>{category}</td>
+            <td class="amount">€{budgeted:,.2f}</td>
+            <td class="amount {activity_class}">€{activity_str}</td>
             <td class="amount {'negative' if item['available'] < 0 else ''}">€{item['available']:,.2f}</td>
             <td><span class="status {item['status']}">{status_text}</span></td>
             <td>
