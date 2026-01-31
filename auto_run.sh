@@ -5,9 +5,9 @@
 # Modos de uso:
 #   ./auto_run.sh categorize   - Modo interactivo de categorización
 #   ./auto_run.sh report       - Solo mostrar reportes
+#   ./auto_run.sh email        - Enviar reporte por email
 #
-# Para programar con cron (reporte semanal cada lunes a las 9am):
-# 0 9 * * 1 /ruta/completa/a/auto_run.sh report >> /ruta/a/logs/ynab.log 2>&1
+# Para programar envío semanal, ejecuta: ./setup_cron.sh
 #
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"

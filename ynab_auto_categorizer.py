@@ -14,6 +14,9 @@ import argparse
 import webbrowser
 from collections import defaultdict
 from pathlib import Path
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Archivo de reglas personalizado
 RULES_FILE = Path(__file__).parent / "categorization_rules.json"
@@ -496,6 +499,216 @@ class YNABAutoCategorizer:
 
         # Abrir en navegador
         webbrowser.open(f"file://{html_file}")
+
+    def send_email_report(self, to_email: str = None):
+        """Genera y envía el reporte por email"""
+        print("\n📧 Preparando envío de reporte por email...")
+
+        # Configuración de email
+        smtp_user = os.getenv("GMAIL_USER")
+        smtp_pass = os.getenv("GMAIL_APP_PASSWORD")
+        recipient = to_email or os.getenv("REPORT_EMAIL", smtp_user)
+
+        if not smtp_user or not smtp_pass:
+            print("❌ Error: Configura GMAIL_USER y GMAIL_APP_PASSWORD en .env")
+            print("   Para crear una contraseña de aplicación:")
+            print("   1. Ve a https://myaccount.google.com/apppasswords")
+            print("   2. Crea una contraseña para 'Correo' en 'Mac'")
+            return False
+
+        # Generar datos
+        try:
+            monthly_budget = self.get_monthly_budget()
+        except:
+            monthly_budget = {}
+
+        weekly_report = self.get_report_data(period="week")
+        monthly_report = self.get_report_data(period="month")
+
+        # Generar HTML inline (sin Chart.js para compatibilidad con email)
+        html_content = self._generate_email_html(weekly_report, monthly_report, monthly_budget)
+
+        # Crear mensaje
+        msg = MIMEMultipart('alternative')
+        now = datetime.now()
+        msg['Subject'] = f"📊 YNAB Report - Semana {now.strftime('%d/%m/%Y')}"
+        msg['From'] = smtp_user
+        msg['To'] = recipient
+
+        # Versión texto plano
+        text_content = self._generate_text_report(weekly_report, monthly_report)
+        msg.attach(MIMEText(text_content, 'plain', 'utf-8'))
+
+        # Versión HTML
+        msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+
+        # Enviar
+        try:
+            print(f"📤 Enviando a {recipient}...")
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+            print(f"✅ Reporte enviado correctamente a {recipient}")
+            return True
+        except Exception as e:
+            print(f"❌ Error al enviar: {e}")
+            return False
+
+    def _generate_text_report(self, weekly: Dict, monthly: Dict) -> str:
+        """Genera versión texto plano del reporte"""
+        lines = [
+            "═" * 50,
+            "📊 YNAB FINANCIAL REPORT",
+            "═" * 50,
+            "",
+            f"📅 RESUMEN SEMANAL ({weekly['period']})",
+            f"   Ingresos:  €{weekly['total_income']:,.2f}",
+            f"   Gastos:    €{weekly['total_expenses']:,.2f}",
+            f"   Balance:   €{weekly['net']:,.2f}",
+            "",
+            f"📅 RESUMEN MENSUAL ({monthly['period']})",
+            f"   Ingresos:  €{monthly['total_income']:,.2f}",
+            f"   Gastos:    €{monthly['total_expenses']:,.2f}",
+            f"   Balance:   €{monthly['net']:,.2f}",
+            "",
+            "📉 TOP GASTOS DEL MES:",
+        ]
+
+        for cat, amt in list(monthly['expenses_by_category'].items())[:10]:
+            pct = (amt / monthly['total_expenses'] * 100) if monthly['total_expenses'] > 0 else 0
+            lines.append(f"   {cat:<30} €{amt:>10,.2f} ({pct:.1f}%)")
+
+        lines.extend(["", "─" * 50, "Generado por YNAB Auto-Categorizer"])
+        return "\n".join(lines)
+
+    def _generate_email_html(self, weekly: Dict, monthly: Dict, budget: Dict) -> str:
+        """Genera HTML optimizado para email (sin JavaScript)"""
+        now = datetime.now()
+
+        # Generar filas de gastos
+        expense_rows = ""
+        for cat, amt in list(monthly['expenses_by_category'].items())[:10]:
+            pct = (amt / monthly['total_expenses'] * 100) if monthly['total_expenses'] > 0 else 0
+            expense_rows += f'''
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #eee;">{cat}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">€{amt:,.2f}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right;">{pct:.1f}%</td>
+            </tr>'''
+
+        # Generar filas de presupuesto
+        budget_rows = ""
+        for cat, b in budget.items():
+            if (b['activity'] != 0 or b['budgeted'] > 0) and cat not in ["Inflow: Ready to Assign", "Sin categoría"]:
+                activity = b['activity']
+                status_color = "#ef4444" if b['balance'] < 0 else ("#f59e0b" if b['budgeted'] > 0 and b['balance'] < b['budgeted'] * 0.2 else "#22c55e")
+                status_text = "Excedido" if b['balance'] < 0 else ("Bajo" if b['budgeted'] > 0 and b['balance'] < b['budgeted'] * 0.2 else "OK")
+                activity_str = f"−€{abs(activity):,.2f}" if activity < 0 else f"€{activity:,.2f}"
+                budget_rows += f'''
+                <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #eee;">{cat}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">€{b['budgeted']:,.2f}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">{activity_str}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">€{b['balance']:,.2f}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #eee;"><span style="background: {status_color}; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px;">{status_text}</span></td>
+                </tr>'''
+
+        return f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+    <table cellpadding="0" cellspacing="0" width="100%" style="max-width: 700px; margin: 20px auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+        <!-- Header -->
+        <tr>
+            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;">
+                <h1 style="color: white; margin: 0; font-size: 24px;">📊 YNAB Financial Report</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 10px 0 0 0;">{now.strftime('%d de %B de %Y')}</p>
+            </td>
+        </tr>
+
+        <!-- Summary Cards -->
+        <tr>
+            <td style="padding: 20px;">
+                <table cellpadding="0" cellspacing="10" width="100%">
+                    <tr>
+                        <td style="background: #f0fdf4; padding: 20px; border-radius: 10px; text-align: center; width: 33%;">
+                            <p style="color: #666; margin: 0 0 5px 0; font-size: 12px;">INGRESOS (MES)</p>
+                            <p style="color: #22c55e; margin: 0; font-size: 24px; font-weight: bold;">€{monthly['total_income']:,.2f}</p>
+                        </td>
+                        <td style="background: #fef2f2; padding: 20px; border-radius: 10px; text-align: center; width: 33%;">
+                            <p style="color: #666; margin: 0 0 5px 0; font-size: 12px;">GASTOS (MES)</p>
+                            <p style="color: #ef4444; margin: 0; font-size: 24px; font-weight: bold;">€{monthly['total_expenses']:,.2f}</p>
+                        </td>
+                        <td style="background: {'#f0fdf4' if monthly['net'] >= 0 else '#fef2f2'}; padding: 20px; border-radius: 10px; text-align: center; width: 33%;">
+                            <p style="color: #666; margin: 0 0 5px 0; font-size: 12px;">BALANCE</p>
+                            <p style="color: {'#22c55e' if monthly['net'] >= 0 else '#ef4444'}; margin: 0; font-size: 24px; font-weight: bold;">€{monthly['net']:,.2f}</p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+
+        <!-- Weekly Summary -->
+        <tr>
+            <td style="padding: 0 20px;">
+                <div style="background: #f8fafc; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+                    <h3 style="margin: 0 0 10px 0; color: #334155;">📅 Resumen Semanal</h3>
+                    <p style="margin: 0; color: #64748b; font-size: 14px;">{weekly['period']}</p>
+                    <p style="margin: 10px 0 0 0; font-size: 16px;">
+                        Ingresos: <strong style="color: #22c55e;">€{weekly['total_income']:,.2f}</strong> &nbsp;|&nbsp;
+                        Gastos: <strong style="color: #ef4444;">€{weekly['total_expenses']:,.2f}</strong> &nbsp;|&nbsp;
+                        Balance: <strong style="color: {'#22c55e' if weekly['net'] >= 0 else '#ef4444'};">€{weekly['net']:,.2f}</strong>
+                    </p>
+                </div>
+            </td>
+        </tr>
+
+        <!-- Top Expenses -->
+        <tr>
+            <td style="padding: 0 20px 20px 20px;">
+                <h3 style="margin: 0 0 15px 0; color: #334155;">📉 Top Gastos del Mes</h3>
+                <table cellpadding="0" cellspacing="0" width="100%" style="border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
+                    <tr style="background: #f8fafc;">
+                        <th style="padding: 12px; text-align: left; font-size: 12px; color: #64748b;">Categoría</th>
+                        <th style="padding: 12px; text-align: right; font-size: 12px; color: #64748b;">Importe</th>
+                        <th style="padding: 12px; text-align: right; font-size: 12px; color: #64748b;">%</th>
+                    </tr>
+                    {expense_rows}
+                </table>
+            </td>
+        </tr>
+
+        <!-- Budget vs Activity -->
+        <tr>
+            <td style="padding: 0 20px 20px 20px;">
+                <h3 style="margin: 0 0 15px 0; color: #334155;">💳 Presupuesto vs Actividad</h3>
+                <table cellpadding="0" cellspacing="0" width="100%" style="border: 1px solid #eee; border-radius: 8px; overflow: hidden; font-size: 13px;">
+                    <tr style="background: #f8fafc;">
+                        <th style="padding: 10px; text-align: left; font-size: 11px; color: #64748b;">Categoría</th>
+                        <th style="padding: 10px; text-align: right; font-size: 11px; color: #64748b;">Asignado</th>
+                        <th style="padding: 10px; text-align: right; font-size: 11px; color: #64748b;">Actividad</th>
+                        <th style="padding: 10px; text-align: right; font-size: 11px; color: #64748b;">Disponible</th>
+                        <th style="padding: 10px; text-align: left; font-size: 11px; color: #64748b;">Estado</th>
+                    </tr>
+                    {budget_rows}
+                </table>
+            </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+            <td style="background: #f8fafc; padding: 20px; text-align: center;">
+                <p style="margin: 0; color: #94a3b8; font-size: 12px;">
+                    Generado automáticamente por YNAB Auto-Categorizer
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>'''
 
     def generate_html_report(self, weekly: Dict, monthly: Dict, budget: Dict) -> str:
         """Genera reporte HTML con gráficos"""
@@ -987,17 +1200,19 @@ def main():
 Modos de ejecución:
   categorize    Categorización interactiva de transacciones
   report        Mostrar reportes semanal y mensual
+  email         Enviar reporte por correo electrónico
 
 Ejemplos:
   python3 ynab_auto_categorizer.py categorize
   python3 ynab_auto_categorizer.py report
+  python3 ynab_auto_categorizer.py email
         """
     )
 
     parser.add_argument(
         'mode',
         nargs='?',
-        choices=['categorize', 'report'],
+        choices=['categorize', 'report', 'email'],
         help='Modo de ejecución'
     )
 
@@ -1020,14 +1235,17 @@ Ejemplos:
         print("="*40)
         print("1. Categorizar transacciones")
         print("2. Ver reportes")
+        print("3. Enviar reporte por email")
         print("="*40)
 
-        choice = input("\nElige una opción (1-2): ").strip()
+        choice = input("\nElige una opción (1-3): ").strip()
 
         if choice == "1":
             args.mode = "categorize"
         elif choice == "2":
             args.mode = "report"
+        elif choice == "3":
+            args.mode = "email"
         else:
             print("Opción no válida")
             sys.exit(1)
@@ -1042,6 +1260,9 @@ Ejemplos:
 
     elif args.mode == "report":
         categorizer.show_full_report()
+
+    elif args.mode == "email":
+        categorizer.send_email_report()
 
 
 if __name__ == "__main__":
