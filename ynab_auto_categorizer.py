@@ -59,13 +59,42 @@ class YNABAutoCategorizer:
         url = f"{self.base_url}/budgets/{self.budget_id}/categories"
         response = requests.get(url, headers=self.headers)
         response.raise_for_status()
-        
+
         categories = {}
         for group in response.json()["data"]["category_groups"]:
             for category in group["categories"]:
                 categories[category["name"]] = category["id"]
-        
+
         return categories
+
+    def get_monthly_budget(self, month: str = None) -> Dict[str, Dict]:
+        """
+        Obtiene el presupuesto mensual por categoría
+
+        Args:
+            month: Mes en formato YYYY-MM-01 (por defecto mes actual)
+
+        Returns:
+            Diccionario con {categoria: {budgeted, activity, balance}}
+        """
+        if month is None:
+            month = datetime.now().strftime("%Y-%m-01")
+
+        url = f"{self.base_url}/budgets/{self.budget_id}/months/{month}"
+        response = requests.get(url, headers=self.headers)
+        response.raise_for_status()
+
+        budget_data = {}
+        for category in response.json()["data"]["month"]["categories"]:
+            budget_data[category["name"]] = {
+                "id": category["id"],
+                "budgeted": category["budgeted"] / 1000,
+                "activity": category["activity"] / 1000,
+                "balance": category["balance"] / 1000,
+                "goal_target": category.get("goal_target", 0) / 1000 if category.get("goal_target") else 0
+            }
+
+        return budget_data
     
     def get_uncategorized_transactions(self, days_back: int = 30) -> List[Dict]:
         """
@@ -242,33 +271,57 @@ class YNABAutoCategorizer:
         }
     
     def print_weekly_report(self, weeks_back: int = 1):
-        """Imprime un reporte semanal formateado"""
+        """Imprime un reporte semanal formateado con presupuesto vs actividad"""
         report = self.get_weekly_report(weeks_back)
-        
-        print("\n" + "="*60)
-        print(f"📊 REPORTE SEMANAL - {report['period']}")
-        print("="*60)
-        
+
+        # Obtener presupuesto del mes actual
+        try:
+            monthly_budget = self.get_monthly_budget()
+        except:
+            monthly_budget = {}
+
+        print("\n" + "="*80)
+        print(f"📊 REPORTE - {report['period']}")
+        print("="*80)
+
         print(f"\n💰 RESUMEN:")
         print(f"   Ingresos:  €{report['total_income']:>10,.2f}")
         print(f"   Gastos:    €{report['total_expenses']:>10,.2f}")
         print(f"   {'─'*30}")
         balance_symbol = "✅" if report['net'] >= 0 else "⚠️"
         print(f"   {balance_symbol} Balance:  €{report['net']:>10,.2f}")
-        
-        print(f"\n📉 GASTOS POR CATEGORÍA:")
-        for category, amount in report['expenses_by_category'].items():
-            percentage = (amount / report['total_expenses'] * 100) if report['total_expenses'] > 0 else 0
-            bar = "█" * int(percentage / 5)
-            print(f"   {category:25} €{amount:>8,.2f} ({percentage:5.1f}%) {bar}")
-        
+
+        print(f"\n📉 GASTOS POR CATEGORÍA (Presupuesto vs Actividad):")
+        print(f"   {'Categoría':<30} {'Presup.':>10} {'Actividad':>10} {'Disponible':>12} {'Estado'}")
+        print(f"   {'-'*75}")
+
+        for category, activity in report['expenses_by_category'].items():
+            if category in monthly_budget:
+                budget_info = monthly_budget[category]
+                budgeted = budget_info['budgeted']
+                balance = budget_info['balance']
+
+                # Determinar estado
+                if budgeted == 0:
+                    status = "⚪ Sin presup."
+                elif balance < 0:
+                    status = "🔴 Excedido"
+                elif balance < budgeted * 0.2:
+                    status = "🟡 Casi agotado"
+                else:
+                    status = "🟢 OK"
+
+                print(f"   {category:<30} €{budgeted:>8,.2f} €{activity:>8,.2f} €{balance:>10,.2f} {status}")
+            else:
+                print(f"   {category:<30} €{'---':>8} €{activity:>8,.2f} €{'---':>10} ⚪")
+
         if report['income_by_category']:
             print(f"\n💵 INGRESOS POR CATEGORÍA:")
             for category, amount in report['income_by_category'].items():
-                print(f"   {category:25} €{amount:>8,.2f}")
-        
+                print(f"   {category:30} €{amount:>8,.2f}")
+
         print(f"\n📝 Total de transacciones: {report['transaction_count']}")
-        print("="*60 + "\n")
+        print("="*80 + "\n")
 
 
 def main():
