@@ -223,9 +223,19 @@ class YNABAutoCategorizer:
             payee_name = transaction.get("payee_name", "Sin nombre")
             amount = transaction["amount"] / 1000
             date = transaction["date"]
+            memo = transaction.get("memo", "")
+            account = transaction.get("account_name", "")
+            original_payee = transaction.get("import_payee_name_original", "")
 
             print(f"\n[{i}/{len(uncategorized)}] {date} | {payee_name}")
             print(f"         Importe: €{amount:,.2f}")
+            print(f"         Cuenta:  {account}")
+            if original_payee and original_payee != payee_name:
+                # Limpiar el ID interno de Revolut si existe
+                clean_original = original_payee.split(" - UK.Revolut")[0].split(" - ES.Revolut")[0]
+                print(f"         Detalle: {clean_original}")
+            if memo:
+                print(f"         Memo:    {memo}")
 
             # Buscar categoría por reglas
             suggested_category = self.find_category_by_rules(payee_name)
