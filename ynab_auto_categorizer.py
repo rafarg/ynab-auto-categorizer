@@ -582,36 +582,114 @@ class YNABAutoCategorizer:
         return "\n".join(lines)
 
     def _generate_email_html(self, weekly: Dict, monthly: Dict, budget: Dict) -> str:
-        """Genera HTML optimizado para email (sin JavaScript)"""
+        """Genera HTML optimizado para email con estilo oscuro igual al reporte"""
         now = datetime.now()
+        colors = ['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899',
+                  '#f43f5e', '#f97316', '#eab308', '#84cc16', '#22c55e']
 
-        # Generar filas de gastos
+        # Generar barras de gastos semanales
+        weekly_bars = ""
+        max_weekly = max(weekly['expenses_by_category'].values()) if weekly['expenses_by_category'] else 1
+        for i, (cat, amt) in enumerate(list(weekly['expenses_by_category'].items())[:10]):
+            pct = (amt / max_weekly * 100) if max_weekly > 0 else 0
+            color = colors[i % len(colors)]
+            weekly_bars += f'''
+            <tr>
+                <td style="padding: 8px 12px; color: #ccc; font-size: 13px; white-space: nowrap;">{cat}</td>
+                <td style="padding: 8px 12px; width: 60%;">
+                    <div style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 20px; overflow: hidden;">
+                        <div style="background: {color}; height: 100%; width: {pct:.0f}%; border-radius: 4px;"></div>
+                    </div>
+                </td>
+                <td style="padding: 8px 12px; color: #888; font-size: 13px; text-align: right; font-family: monospace;">€{amt:,.2f}</td>
+            </tr>'''
+
+        # Generar barras de gastos mensuales
+        monthly_bars = ""
+        max_monthly = max(monthly['expenses_by_category'].values()) if monthly['expenses_by_category'] else 1
+        for i, (cat, amt) in enumerate(list(monthly['expenses_by_category'].items())[:15]):
+            pct = (amt / max_monthly * 100) if max_monthly > 0 else 0
+            color = colors[i % len(colors)]
+            monthly_bars += f'''
+            <tr>
+                <td style="padding: 6px 12px; color: #ccc; font-size: 12px; white-space: nowrap;">{cat}</td>
+                <td style="padding: 6px 12px; width: 60%;">
+                    <div style="background: rgba(255,255,255,0.1); border-radius: 4px; height: 18px; overflow: hidden;">
+                        <div style="background: {color}; height: 100%; width: {pct:.0f}%; border-radius: 4px;"></div>
+                    </div>
+                </td>
+                <td style="padding: 6px 12px; color: #888; font-size: 12px; text-align: right; font-family: monospace;">€{amt:,.2f}</td>
+            </tr>'''
+
+        # Generar filas de ingresos
+        income_rows = ""
+        for cat, amt in monthly['income_by_category'].items():
+            if cat != "Sin categoría":
+                income_rows += f'''
+                <tr>
+                    <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #eee;">{cat}</td>
+                    <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #4ade80; text-align: right; font-family: monospace;">€{amt:,.2f}</td>
+                </tr>'''
+
+        # Generar filas de top gastos
         expense_rows = ""
         for cat, amt in list(monthly['expenses_by_category'].items())[:10]:
             pct = (amt / monthly['total_expenses'] * 100) if monthly['total_expenses'] > 0 else 0
             expense_rows += f'''
             <tr>
-                <td style="padding: 12px; border-bottom: 1px solid #eee;">{cat}</td>
-                <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">€{amt:,.2f}</td>
-                <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right;">{pct:.1f}%</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #eee;">{cat}</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #f87171; text-align: right; font-family: monospace;">€{amt:,.2f}</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #888; text-align: right;">{pct:.1f}%</td>
             </tr>'''
 
-        # Generar filas de presupuesto
+        # Generar filas de presupuesto con barra de progreso
         budget_rows = ""
+        budget_data = []
         for cat, b in budget.items():
             if (b['activity'] != 0 or b['budgeted'] > 0) and cat not in ["Inflow: Ready to Assign", "Sin categoría"]:
-                activity = b['activity']
-                status_color = "#ef4444" if b['balance'] < 0 else ("#f59e0b" if b['budgeted'] > 0 and b['balance'] < b['budgeted'] * 0.2 else "#22c55e")
-                status_text = "Excedido" if b['balance'] < 0 else ("Bajo" if b['budgeted'] > 0 and b['balance'] < b['budgeted'] * 0.2 else "OK")
-                activity_str = f"−€{abs(activity):,.2f}" if activity < 0 else f"€{activity:,.2f}"
-                budget_rows += f'''
-                <tr>
-                    <td style="padding: 10px; border-bottom: 1px solid #eee;">{cat}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">€{b['budgeted']:,.2f}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">{activity_str}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right; font-family: monospace;">€{b['balance']:,.2f}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #eee;"><span style="background: {status_color}; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px;">{status_text}</span></td>
-                </tr>'''
+                budget_data.append((cat, b))
+        budget_data.sort(key=lambda x: x[1]['activity'])
+
+        for cat, b in budget_data:
+            activity = b['activity']
+            budgeted = b['budgeted']
+            pct = (abs(activity) / budgeted * 100) if budgeted > 0 else 100
+
+            if b['balance'] < 0:
+                status_color = "#f87171"
+                status_bg = "rgba(248, 113, 113, 0.2)"
+                status_text = "Excedido"
+                bar_color = "#f87171"
+            elif budgeted > 0 and b['balance'] < budgeted * 0.2:
+                status_color = "#fbbf24"
+                status_bg = "rgba(251, 191, 36, 0.2)"
+                status_text = "Bajo"
+                bar_color = "#fbbf24"
+            else:
+                status_color = "#4ade80"
+                status_bg = "rgba(74, 222, 128, 0.2)"
+                status_text = "OK"
+                bar_color = "#4ade80"
+
+            activity_color = "#f87171" if activity < 0 else "#4ade80"
+            activity_str = f"−€{abs(activity):,.2f}" if activity < 0 else f"€{activity:,.2f}"
+            available_color = "#f87171" if b['balance'] < 0 else "#eee"
+
+            budget_rows += f'''
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #eee;">{cat}</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #eee; text-align: right; font-family: monospace;">€{budgeted:,.2f}</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: {activity_color}; text-align: right; font-family: monospace;">{activity_str}</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); color: {available_color}; text-align: right; font-family: monospace;">€{b['balance']:,.2f}</td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <span style="background: {status_bg}; color: {status_color}; padding: 4px 10px; border-radius: 20px; font-size: 12px;">{status_text}</span>
+                </td>
+                <td style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); width: 100px;">
+                    <div style="background: rgba(255,255,255,0.1); border-radius: 3px; height: 6px; overflow: hidden;">
+                        <div style="background: {bar_color}; height: 100%; width: {min(pct, 100):.0f}%; border-radius: 3px;"></div>
+                    </div>
+                </td>
+            </tr>'''
 
         return f'''<!DOCTYPE html>
 <html>
@@ -619,91 +697,125 @@ class YNABAutoCategorizer:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-    <table cellpadding="0" cellspacing="0" width="100%" style="max-width: 700px; margin: 20px auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+<body style="margin: 0; padding: 20px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+    <table cellpadding="0" cellspacing="0" width="100%" style="max-width: 900px; margin: 0 auto;">
         <!-- Header -->
         <tr>
-            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;">
-                <h1 style="color: white; margin: 0; font-size: 24px;">📊 YNAB Financial Report</h1>
-                <p style="color: rgba(255,255,255,0.8); margin: 10px 0 0 0;">{now.strftime('%d de %B de %Y')}</p>
+            <td style="text-align: center; padding: 30px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h1 style="color: #eee; margin: 0; font-size: 2em;">📊 YNAB Financial Report</h1>
+                <p style="color: #888; margin: 10px 0 0 0; font-size: 1.1em;">{now.strftime('%d de %B de %Y')}</p>
             </td>
         </tr>
 
         <!-- Summary Cards -->
         <tr>
-            <td style="padding: 20px;">
-                <table cellpadding="0" cellspacing="10" width="100%">
+            <td style="padding: 30px 0;">
+                <table cellpadding="0" cellspacing="15" width="100%">
                     <tr>
-                        <td style="background: #f0fdf4; padding: 20px; border-radius: 10px; text-align: center; width: 33%;">
-                            <p style="color: #666; margin: 0 0 5px 0; font-size: 12px;">INGRESOS (MES)</p>
-                            <p style="color: #22c55e; margin: 0; font-size: 24px; font-weight: bold;">€{monthly['total_income']:,.2f}</p>
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); text-align: center; width: 25%;">
+                            <p style="color: #888; margin: 0 0 10px 0; font-size: 0.9em; text-transform: uppercase;">💰 Ingresos (Mes)</p>
+                            <p style="color: #4ade80; margin: 0; font-size: 1.8em; font-weight: bold;">€{monthly['total_income']:,.2f}</p>
                         </td>
-                        <td style="background: #fef2f2; padding: 20px; border-radius: 10px; text-align: center; width: 33%;">
-                            <p style="color: #666; margin: 0 0 5px 0; font-size: 12px;">GASTOS (MES)</p>
-                            <p style="color: #ef4444; margin: 0; font-size: 24px; font-weight: bold;">€{monthly['total_expenses']:,.2f}</p>
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); text-align: center; width: 25%;">
+                            <p style="color: #888; margin: 0 0 10px 0; font-size: 0.9em; text-transform: uppercase;">💸 Gastos (Mes)</p>
+                            <p style="color: #f87171; margin: 0; font-size: 1.8em; font-weight: bold;">€{monthly['total_expenses']:,.2f}</p>
                         </td>
-                        <td style="background: {'#f0fdf4' if monthly['net'] >= 0 else '#fef2f2'}; padding: 20px; border-radius: 10px; text-align: center; width: 33%;">
-                            <p style="color: #666; margin: 0 0 5px 0; font-size: 12px;">BALANCE</p>
-                            <p style="color: {'#22c55e' if monthly['net'] >= 0 else '#ef4444'}; margin: 0; font-size: 24px; font-weight: bold;">€{monthly['net']:,.2f}</p>
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); text-align: center; width: 25%;">
+                            <p style="color: #888; margin: 0 0 10px 0; font-size: 0.9em; text-transform: uppercase;">{'✅' if monthly['net'] >= 0 else '⚠️'} Balance (Mes)</p>
+                            <p style="color: {'#4ade80' if monthly['net'] >= 0 else '#f87171'}; margin: 0; font-size: 1.8em; font-weight: bold;">€{monthly['net']:,.2f}</p>
+                        </td>
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); text-align: center; width: 25%;">
+                            <p style="color: #888; margin: 0 0 10px 0; font-size: 0.9em; text-transform: uppercase;">📝 Transacciones</p>
+                            <p style="color: #eee; margin: 0; font-size: 1.8em; font-weight: bold;">{monthly['transaction_count']}</p>
                         </td>
                     </tr>
                 </table>
             </td>
         </tr>
 
-        <!-- Weekly Summary -->
+        <!-- Charts Row -->
         <tr>
-            <td style="padding: 0 20px;">
-                <div style="background: #f8fafc; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
-                    <h3 style="margin: 0 0 10px 0; color: #334155;">📅 Resumen Semanal</h3>
-                    <p style="margin: 0; color: #64748b; font-size: 14px;">{weekly['period']}</p>
-                    <p style="margin: 10px 0 0 0; font-size: 16px;">
-                        Ingresos: <strong style="color: #22c55e;">€{weekly['total_income']:,.2f}</strong> &nbsp;|&nbsp;
-                        Gastos: <strong style="color: #ef4444;">€{weekly['total_expenses']:,.2f}</strong> &nbsp;|&nbsp;
-                        Balance: <strong style="color: {'#22c55e' if weekly['net'] >= 0 else '#ef4444'};">€{weekly['net']:,.2f}</strong>
-                    </p>
-                </div>
+            <td>
+                <table cellpadding="0" cellspacing="15" width="100%">
+                    <tr>
+                        <!-- Weekly Chart -->
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); width: 50%; vertical-align: top;">
+                            <h2 style="color: #eee; margin: 0 0 5px 0; font-size: 1.2em;">📈 Gastos Semanales</h2>
+                            <p style="color: #888; margin: 0 0 15px 0; font-size: 0.9em;">{weekly['period']} • €{weekly['total_expenses']:,.2f} total</p>
+                            <table cellpadding="0" cellspacing="0" width="100%">
+                                {weekly_bars}
+                            </table>
+                        </td>
+                        <!-- Monthly Chart -->
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); width: 50%; vertical-align: top;">
+                            <h2 style="color: #eee; margin: 0 0 5px 0; font-size: 1.2em;">📊 Gastos Mensuales</h2>
+                            <p style="color: #888; margin: 0 0 15px 0; font-size: 0.9em;">{monthly['period']} • €{monthly['total_expenses']:,.2f} total</p>
+                            <table cellpadding="0" cellspacing="0" width="100%">
+                                {monthly_bars}
+                            </table>
+                        </td>
+                    </tr>
+                </table>
             </td>
         </tr>
 
-        <!-- Top Expenses -->
+        <!-- Income & Expenses Tables -->
         <tr>
-            <td style="padding: 0 20px 20px 20px;">
-                <h3 style="margin: 0 0 15px 0; color: #334155;">📉 Top Gastos del Mes</h3>
-                <table cellpadding="0" cellspacing="0" width="100%" style="border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
-                    <tr style="background: #f8fafc;">
-                        <th style="padding: 12px; text-align: left; font-size: 12px; color: #64748b;">Categoría</th>
-                        <th style="padding: 12px; text-align: right; font-size: 12px; color: #64748b;">Importe</th>
-                        <th style="padding: 12px; text-align: right; font-size: 12px; color: #64748b;">%</th>
+            <td style="padding-top: 15px;">
+                <table cellpadding="0" cellspacing="15" width="100%">
+                    <tr>
+                        <!-- Income -->
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); width: 50%; vertical-align: top;">
+                            <h2 style="color: #eee; margin: 0 0 20px 0; font-size: 1.2em;">💵 Ingresos por Categoría</h2>
+                            <table cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <th style="padding: 12px; text-align: left; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Categoría</th>
+                                    <th style="padding: 12px; text-align: right; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Importe</th>
+                                </tr>
+                                {income_rows}
+                            </table>
+                        </td>
+                        <!-- Top Expenses -->
+                        <td style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); width: 50%; vertical-align: top;">
+                            <h2 style="color: #eee; margin: 0 0 20px 0; font-size: 1.2em;">📉 Top Gastos del Mes</h2>
+                            <table cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <th style="padding: 12px; text-align: left; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Categoría</th>
+                                    <th style="padding: 12px; text-align: right; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Importe</th>
+                                    <th style="padding: 12px; text-align: right; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">%</th>
+                                </tr>
+                                {expense_rows}
+                            </table>
+                        </td>
                     </tr>
-                    {expense_rows}
                 </table>
             </td>
         </tr>
 
         <!-- Budget vs Activity -->
         <tr>
-            <td style="padding: 0 20px 20px 20px;">
-                <h3 style="margin: 0 0 15px 0; color: #334155;">💳 Presupuesto vs Actividad</h3>
-                <table cellpadding="0" cellspacing="0" width="100%" style="border: 1px solid #eee; border-radius: 8px; overflow: hidden; font-size: 13px;">
-                    <tr style="background: #f8fafc;">
-                        <th style="padding: 10px; text-align: left; font-size: 11px; color: #64748b;">Categoría</th>
-                        <th style="padding: 10px; text-align: right; font-size: 11px; color: #64748b;">Asignado</th>
-                        <th style="padding: 10px; text-align: right; font-size: 11px; color: #64748b;">Actividad</th>
-                        <th style="padding: 10px; text-align: right; font-size: 11px; color: #64748b;">Disponible</th>
-                        <th style="padding: 10px; text-align: left; font-size: 11px; color: #64748b;">Estado</th>
-                    </tr>
-                    {budget_rows}
-                </table>
+            <td style="padding-top: 15px;">
+                <div style="background: rgba(255,255,255,0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1);">
+                    <h2 style="color: #eee; margin: 0 0 20px 0; font-size: 1.2em;">💳 Presupuesto vs Actividad</h2>
+                    <table cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                            <th style="padding: 12px; text-align: left; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Categoría</th>
+                            <th style="padding: 12px; text-align: right; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Asignado</th>
+                            <th style="padding: 12px; text-align: right; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Actividad</th>
+                            <th style="padding: 12px; text-align: right; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Disponible</th>
+                            <th style="padding: 12px; text-align: left; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1);">Estado</th>
+                            <th style="padding: 12px; text-align: left; color: #888; font-size: 0.85em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.1); width: 100px;">Progreso</th>
+                        </tr>
+                        {budget_rows}
+                    </table>
+                </div>
             </td>
         </tr>
 
         <!-- Footer -->
         <tr>
-            <td style="background: #f8fafc; padding: 20px; text-align: center;">
-                <p style="margin: 0; color: #94a3b8; font-size: 12px;">
-                    Generado automáticamente por YNAB Auto-Categorizer
-                </p>
+            <td style="text-align: center; padding: 30px 0; color: #666; font-size: 0.9em;">
+                <p style="margin: 0;">YNAB Auto-Categorizer • Reporte generado automáticamente</p>
             </td>
         </tr>
     </table>
@@ -1253,10 +1365,6 @@ Ejemplos:
     # Ejecutar modo seleccionado
     if args.mode == "categorize":
         categorizer.interactive_categorize()
-        # Mostrar reporte al finalizar
-        print("\n" + "="*80)
-        print("📊 REPORTE POST-CATEGORIZACIÓN")
-        categorizer.show_full_report()
 
     elif args.mode == "report":
         categorizer.show_full_report()

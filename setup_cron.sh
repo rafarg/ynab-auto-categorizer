@@ -1,10 +1,15 @@
 #!/bin/bash
 #
-# Configura el cron job para enviar el reporte semanal por email
+# Configura el envío automático de reportes YNAB usando launchd
+# (funciona incluso si el Mac estaba suspendido)
+#
 # Ejecuta: ./setup_cron.sh
 #
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PLIST_NAME="com.ynab.weekly-report"
+PLIST_FILE="${SCRIPT_DIR}/${PLIST_NAME}.plist"
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
 echo "📧 Configuración de envío automático de reportes YNAB"
 echo "======================================================"
@@ -17,7 +22,7 @@ if [ ! -f "${SCRIPT_DIR}/.env" ]; then
     exit 1
 fi
 
-# Verificar que están configuradas las credenciales de Gmail
+# Verificar credenciales
 source "${SCRIPT_DIR}/.env"
 if [ -z "$GMAIL_USER" ] || [ "$GMAIL_USER" = "tu_email@gmail.com" ]; then
     echo "❌ Error: Configura GMAIL_USER en .env"
@@ -40,13 +45,47 @@ echo ""
 read -p "¿A qué hora quieres recibir el reporte los domingos? (0-23) [10]: " HOUR
 HOUR=${HOUR:-10}
 
-# Crear la línea de cron
-CRON_CMD="0 ${HOUR} * * 0 cd ${SCRIPT_DIR} && source .env && export YNAB_API_TOKEN YNAB_BUDGET_ID GMAIL_USER GMAIL_APP_PASSWORD REPORT_EMAIL && /usr/bin/python3 ${SCRIPT_DIR}/ynab_auto_categorizer.py email >> ${SCRIPT_DIR}/email.log 2>&1"
+# Crear el archivo plist actualizado
+cat > "$PLIST_FILE" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_NAME}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ${SCRIPT_DIR} &amp;&amp; source .env &amp;&amp; export YNAB_API_TOKEN YNAB_BUDGET_ID GMAIL_USER GMAIL_APP_PASSWORD REPORT_EMAIL &amp;&amp; /usr/bin/python3 ${SCRIPT_DIR}/ynab_auto_categorizer.py email >> ${SCRIPT_DIR}/email.log 2>&amp;1</string>
+    </array>
+
+    <!-- Ejecutar cada domingo a las ${HOUR}:00 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>${HOUR}</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>${SCRIPT_DIR}/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>${SCRIPT_DIR}/launchd.log</string>
+</dict>
+</plist>
+EOF
 
 echo ""
-echo "Se añadirá la siguiente tarea programada:"
+echo "Se configurará la siguiente tarea programada:"
 echo "  📅 Cada domingo a las ${HOUR}:00"
 echo "  📧 Enviar reporte a: ${REPORT_EMAIL:-$GMAIL_USER}"
+echo "  💤 Se ejecutará al despertar si el Mac estaba suspendido"
 echo ""
 
 read -p "¿Continuar? (s/n) [s]: " CONFIRM
@@ -57,32 +96,28 @@ if [ "$CONFIRM" != "s" ] && [ "$CONFIRM" != "S" ]; then
     exit 0
 fi
 
-# Verificar si ya existe una entrada similar
-EXISTING=$(crontab -l 2>/dev/null | grep "ynab_auto_categorizer.py email")
-if [ -n "$EXISTING" ]; then
-    echo ""
-    echo "⚠️  Ya existe una tarea programada para el reporte YNAB:"
-    echo "   $EXISTING"
-    read -p "¿Reemplazar? (s/n) [n]: " REPLACE
-    REPLACE=${REPLACE:-n}
+# Crear directorio si no existe
+mkdir -p "$LAUNCH_AGENTS_DIR"
 
-    if [ "$REPLACE" = "s" ] || [ "$REPLACE" = "S" ]; then
-        # Eliminar la entrada existente
-        crontab -l 2>/dev/null | grep -v "ynab_auto_categorizer.py email" | crontab -
-    else
-        echo "Manteniendo la configuración existente"
-        exit 0
-    fi
+# Detener servicio existente si lo hay
+if launchctl list | grep -q "$PLIST_NAME"; then
+    echo "🔄 Deteniendo servicio existente..."
+    launchctl unload "$LAUNCH_AGENTS_DIR/$PLIST_NAME.plist" 2>/dev/null
 fi
 
-# Añadir al crontab
-(crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
+# Copiar plist a LaunchAgents
+cp "$PLIST_FILE" "$LAUNCH_AGENTS_DIR/"
+
+# Cargar el servicio
+launchctl load "$LAUNCH_AGENTS_DIR/$PLIST_NAME.plist"
 
 echo ""
-echo "✅ Tarea programada añadida correctamente"
+echo "✅ Servicio instalado correctamente"
 echo ""
-echo "📋 Para verificar: crontab -l"
-echo "📋 Para eliminar:  crontab -e (y borrar la línea)"
+echo "📋 Comandos útiles:"
+echo "   Ver estado:    launchctl list | grep ynab"
+echo "   Ver logs:      tail -f ${SCRIPT_DIR}/email.log"
+echo "   Desinstalar:   launchctl unload ~/Library/LaunchAgents/${PLIST_NAME}.plist"
 echo ""
 echo "💡 Puedes probar el envío ahora ejecutando:"
 echo "   ./auto_run.sh email"

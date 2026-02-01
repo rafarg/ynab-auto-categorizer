@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ynab.weekly-report</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd /Users/rafa/VSC/ynab &amp;&amp; source .env &amp;&amp; export YNAB_API_TOKEN YNAB_BUDGET_ID GMAIL_USER GMAIL_APP_PASSWORD REPORT_EMAIL &amp;&amp; /usr/bin/python3 /Users/rafa/VSC/ynab/ynab_auto_categorizer.py email >> /Users/rafa/VSC/ynab/email.log 2>&amp;1</string>
+    </array>
+
+    <!-- Ejecutar cada domingo a las 10:00 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>10</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/rafa/VSC/ynab/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/rafa/VSC/ynab/launchd.log</string>
+
+    <!-- Ejecutar si se perdió la hora programada (Mac suspendido) -->
+    <key>StartInterval</key>
+    <integer>604800</integer>
+</dict>
+</plist>
